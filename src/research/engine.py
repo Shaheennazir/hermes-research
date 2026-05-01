@@ -144,6 +144,7 @@ class ResearchEngine:
                         "url": result.url,
                         "snippet": r.snippet,
                         "summary": result.content[:1000] if result.content else r.snippet,
+                        "content": result.content if result.content else "",
                         "code": result.code_blocks,
                         "status": result.fetch_status,
                         "type": result.source_type,
@@ -197,6 +198,14 @@ class ResearchEngine:
 
             print(f"  → Turn {turn} complete. Total sources: {len(all_sources)}, code blocks: {len(all_code)}")
 
+        # ── Deduplicate findings across all turns ─────────────────────
+        seen = set()
+        unique_findings = []
+        for f in findings:
+            if f not in seen:
+                seen.add(f)
+                unique_findings.append(f)
+
         # ── Generate report ─────────────────────────────────────────
         report = ResearchReport(
             query=query,
@@ -207,7 +216,7 @@ class ResearchEngine:
             code_blocks=len(all_code),
             papers=len([s for s in all_sources if s["type"] == "paper"]),
             images=len(images) if "images" in dir() else 0,
-            findings=findings,
+            findings=unique_findings,
             sources=all_sources,
             code_snippets=all_code[:20],  # cap at 20
             follow_ups=follow_ups_run,
@@ -271,7 +280,6 @@ class ResearchEngine:
 
         all_findings = []
         for source in new_sources:
-            # content field is set by the fetcher for successful fetches
             extracted = extract_findings_from_source(source, max_per_source=3)
             all_findings.extend(extracted)
 
