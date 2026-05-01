@@ -97,7 +97,9 @@ class Memory:
     def add_findings(self, findings: list[str]):
         if not self.session:
             return
-        self.session.findings.extend(findings)
+        for f in findings:
+            if f not in self.session.findings:
+                self.session.findings.append(f)
         self._save()
 
     def add_follow_up(self, query: str):

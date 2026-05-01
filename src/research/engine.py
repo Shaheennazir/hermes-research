@@ -191,7 +191,8 @@ class ResearchEngine:
                     ))
 
             # ── Synthesize findings for this turn ────────────────
-            turn_findings = self._synthesize_findings(web_results, all_sources[-sources_this_turn:])
+            prior_findings = self.memory.get_previous_findings()
+            turn_findings = self._synthesize_findings(web_results, all_sources[-sources_this_turn:], prior_findings)
             if turn_findings:
                 findings.extend(turn_findings)
                 self.memory.add_findings(turn_findings)
@@ -273,7 +274,7 @@ class ResearchEngine:
 
         return follow_up_templates[0]
 
-    def _synthesize_findings(self, results: list[SearchResult], new_sources: list[dict]) -> list[str]:
+    def _synthesize_findings(self, results: list[SearchResult], new_sources: list[dict], prior_findings: list[str]) -> list[str]:
         """Extract real findings from this turn's fetched sources (not snippets)."""
         if not new_sources:
             return []
@@ -283,8 +284,8 @@ class ResearchEngine:
             extracted = extract_findings_from_source(source, max_per_source=3)
             all_findings.extend(extracted)
 
-        # Deduplicate across all sources this turn
-        seen = set()
+        # Deduplicate across all sources this turn, against prior findings
+        seen = set(prior_findings)
         unique = []
         for f in all_findings:
             if f not in seen:
