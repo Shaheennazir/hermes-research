@@ -20,9 +20,8 @@ class Source:
     code_blocks: list[str] = field(default_factory=list)
     fetch_status: str = "success"  # success | blocked | failed
     source_type: str = "web"  # web | image | paper
-    relevance_score: float = 0.0
     fetched_at: str = ""
-    content_length: int = 0  # raw char count (Signal D input)
+    content_length: int = 0
 
 
 @dataclass
