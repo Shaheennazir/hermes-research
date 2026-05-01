@@ -116,7 +116,70 @@ def extract_keywords(text: str, max_keywords: int = 20) -> list[str]:
     return unique[:max_keywords]
 
 
-# ── Finding extraction ────────────────────────────────────────
+# ── Per-source finding extraction ────────────────────────────────────────
+
+# Patterns for extracting concrete facts from a single source
+_SOURCE_PATTERNS = [
+    # Statements with technical verbs
+    (r'[^.!?]*\b(?:must|requires|uses|supports|provides|returns|accepts|creates|updates|deletes)\b[^.!?]{5,200}[.!?]', 5, 200),
+    # Statements with comparative/performance language
+    (r'[^.!?]*(?:faster|slower|better|worse|unlike|instead|avoid|always|never|should|prefer)[^.!?]{5,200}[.!?]', 5, 200),
+    # Code/dotted constants: GIN, BRIN, GiST, BTREE, etc.
+    (r'\b[A-Z_]{2,}\b', 0, 0),  # handled separately
+    # Version numbers
+    (r'[^.!?]*\bv?\d+(?:\.\d+)+(?:-\w+)?\b[^.!?]{3,100}[.!?]', 3, 100),
+    # Inline code blocks
+    (r'`[^`\n]{10,200}`', 0, 0),
+]
+
+
+def extract_findings_from_source(source: dict, max_per_source: int = 3) -> list[str]:
+    """
+    Extract findings from a single source's content.
+    Returns up to max_per_source findings, deduplicated.
+    """
+    findings = []
+
+    # Support both field names for content
+    content = source.get('content') or source.get('summary', '')
+    if not content or len(content) < 50:
+        return findings
+
+    # Combine content for pattern matching
+    text = content
+    snippet = source.get('snippet', '')
+    if snippet and snippet not in content:
+        text = f"{snippet} {content}"
+
+    for pattern, min_suffix, max_len in _SOURCE_PATTERNS:
+        if not pattern:
+            continue
+        matches = re.findall(pattern, text, re.I)
+        for m in matches:
+            cleaned = m.strip()
+            if min_suffix and len(cleaned) < min_suffix:
+                continue
+            if max_len and len(cleaned) > max_len:
+                cleaned = cleaned[:max_len] + '...'
+            if len(cleaned) < 15:
+                continue
+            # Skip if looks like navigation boilerplate
+            if any(kw in cleaned.lower() for kw in ['key technology', 'found:', 'sources on', 'click', 'learn more']):
+                continue
+            findings.append(cleaned)
+
+    # Deduplicate
+    seen = set()
+    unique = []
+    for f in findings:
+        if f not in seen and len(f) >= 15:
+            seen.add(f)
+            unique.append(f)
+
+    return unique[:max_per_source]
+
+
+# ── Session-level finding extraction ────────────────────────────────────────
 
 def extract_findings(sources: list[dict], findings: list[str], max_findings: int = 10) -> list[str]:
     """

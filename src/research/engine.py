@@ -19,6 +19,7 @@ from typing import Optional
 from .memory import Memory, Source
 from .search import WebSearch, ImageSearch, ArxivSearch, SearchResult
 from .fetchers import WebFetcher, PaperFetcher, FetchResult
+from .summarizer import extract_findings_from_source
 from .assimilator import Assimilator
 
 
@@ -191,8 +192,8 @@ class ResearchEngine:
             # ── Synthesize findings for this turn ────────────────
             turn_findings = self._synthesize_findings(web_results, all_sources[-sources_this_turn:])
             if turn_findings:
-                findings.append(f"[Turn {turn}] {turn_findings}")
-                self.memory.add_findings([turn_findings])
+                findings.extend(turn_findings)
+                self.memory.add_findings(turn_findings)
 
             print(f"  → Turn {turn} complete. Total sources: {len(all_sources)}, code blocks: {len(all_code)}")
 
@@ -263,21 +264,26 @@ class ResearchEngine:
 
         return follow_up_templates[0]
 
-    def _synthesize_findings(self, results: list[SearchResult], new_sources: list[dict]) -> str:
-        """Generate a 1-2 sentence finding from this turn's results."""
-        if not results:
-            return ""
+    def _synthesize_findings(self, results: list[SearchResult], new_sources: list[dict]) -> list[str]:
+        """Extract real findings from this turn's fetched sources (not snippets)."""
+        if not new_sources:
+            return []
 
-        # Extract key themes from snippets
-        all_snippets = " ".join(r.snippet for r in results[:5])
+        all_findings = []
+        for source in new_sources:
+            # content field is set by the fetcher for successful fetches
+            extracted = extract_findings_from_source(source, max_per_source=3)
+            all_findings.extend(extracted)
 
-        # Find technical terms mentioned
-        terms = re.findall(r"\b(next\.js|react|typescript|type\s?\w+|api|server|client|async|hook|component)\b", all_snippets, re.I)
-        unique_terms = list(dict.fromkeys(t.lower() for t in terms))[:5]
+        # Deduplicate across all sources this turn
+        seen = set()
+        unique = []
+        for f in all_findings:
+            if f not in seen:
+                seen.add(f)
+                unique.append(f)
 
-        if unique_terms:
-            return f"Key technologies found: {', '.join(unique_terms)}"
-        return f"Found {len(results)} sources on {results[0].title[:50]}"
+        return unique[:5]  # cap per turn
 
 
 # ── CLI entrypoint ────────────────────────────────────────────────
