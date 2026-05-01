@@ -118,25 +118,73 @@ def extract_keywords(text: str, max_keywords: int = 20) -> list[str]:
 
 # ── Per-source finding extraction ────────────────────────────────────────
 
-# Patterns for extracting concrete facts from a single source
+# ── Per-source finding extraction ────────────────────────────────────────
+
+# Patterns for extracting concrete facts from a single source.
+# Key design: [^.!?\n] is used (not [^.!?]) so that newlines break patterns,
+# preventing multi-line UI junk from being captured as a single sentence.
 _SOURCE_PATTERNS = [
-    # Statements with technical verbs
-    (r'[^.!?]*\b(?:must|requires|uses|supports|provides|returns|accepts|creates|updates|deletes)\b[^.!?]{5,200}[.!?]', 5, 200),
+    # Statements with technical verbs — sentences that describe actual behavior
+    (r'[^.!?\n]*\b(?:must|requires|uses|supports|provides|returns|accepts|creates|updates|deletes|evicts|configures|sets|checks|monitors)\b[^.!?\n]{5,150}[.!?]', 5, 150),
     # Statements with comparative/performance language
-    (r'[^.!?]*(?:faster|slower|better|worse|unlike|instead|avoid|always|never|should|prefer)[^.!?]{5,200}[.!?]', 5, 200),
-    # Code/dotted constants: GIN, BRIN, GiST, BTREE, etc.
-    (r'\b[A-Z_]{2,}\b', 0, 0),  # handled separately
-    # Version numbers
-    (r'[^.!?]*\bv?\d+(?:\.\d+)+(?:-\w+)?\b[^.!?]{3,100}[.!?]', 3, 100),
-    # Inline code blocks
-    (r'`[^`\n]{10,200}`', 0, 0),
+    (r'[^.!?\n]*(?:faster|slower|better|worse|unlike|instead|avoid|always|never|should|prefer|approaches)[^.!?\n]{5,150}[.!?]', 5, 150),
+    # Default / behavior statements
+    (r'[^.!?\n]*(?:default|by default|standard)[^.!?\n]{5,150}[.!?]', 5, 150),
+    # Tuning / configuration guidance
+    (r'[^.!?\n]*(?:tune|tuning|configure|setting|parameter|flag)[^.!?\n]{5,150}[.!?]', 5, 150),
+    # Memory / limit statements
+    (r'[^.!?\n]*(?:maxmemory|memory limit|evict|eviction|evicted)[^.!?\n]{5,150}[.!?]', 5, 150),
+    # Inline code with meaningful content (Redis commands, config values)
+    (r'`[^`\n]{8,120}`', 0, 0),
 ]
+
+
+# Site UI / community boilerplate to skip — matched anywhere in the string
+_BOILERPLATE_TERMS = {
+    # GitHub-docs edit UI
+    'found a typo', 'want to add', 'have a better explanation',
+    'contribute and make this post better', 'edit this page',
+    'fork and run', 'make this post better',
+    # StackOverflow / community
+    'upvote', 'downvote', 'answered ', 'user contributions',
+    'sign up for', 'log in to', 'create an account',
+    # General site chrome
+    'learn more', 'read more', 'click here', 'sources on',
+    'key technology', 'table of contents', 'navigation',
+    # Placeholder / skeleton text
+    'lorem ipsum', 'coming soon', 'page not found',
+    # Generic "help improve" banners
+    'improve this ', 'suggest an edit', 'edit on github',
+    # Headings that are really titles, not findings
+    'how to ', 'what is ', 'what are ', 'how does ', 'how do ',
+    # Question-statement patterns (article section titles that aren't findings)
+    'what things should we be careful', 'here\'s how', 'let\'s look at',
+    'in this article', 'in this post', 'in this guide',
+}
+
+
+def _is_boilerplate(text: str) -> bool:
+    """Return True if text looks like site UI boilerplate rather than a finding."""
+    t = text.lower()
+    # Skip if it starts with common UI framing patterns
+    for kw in _BOILERPLATE_TERMS:
+        if kw in t:
+            return True
+    # Skip very short sentences with only generic words
+    if len(text.split()) < 6:
+        return True
+    return False
+
+
+def _normalize_whitespace(s: str) -> str:
+    """Collapse multiple whitespace chars, strip leading/trailing."""
+    return ' '.join(s.split())
 
 
 def extract_findings_from_source(source: dict, max_per_source: int = 3) -> list[str]:
     """
-    Extract findings from a single source's content.
-    Returns up to max_per_source findings, deduplicated.
+    Extract real factual findings from a source's full content.
+    Returns up to max_per_source findings, deduplicated and cleaned.
     """
     findings = []
 
@@ -145,26 +193,24 @@ def extract_findings_from_source(source: dict, max_per_source: int = 3) -> list[
     if not content or len(content) < 50:
         return findings
 
-    # Combine content for pattern matching
-    text = content
-    snippet = source.get('snippet', '')
-    if snippet and snippet not in content:
-        text = f"{snippet} {content}"
+    # Normalize newlines so [^.!?\n] patterns work correctly
+    text = _normalize_whitespace(content)
 
     for pattern, min_suffix, max_len in _SOURCE_PATTERNS:
         if not pattern:
             continue
         matches = re.findall(pattern, text, re.I)
         for m in matches:
-            cleaned = m.strip()
+            cleaned = _normalize_whitespace(m).strip()
+            # Enforce length constraints
             if min_suffix and len(cleaned) < min_suffix:
                 continue
             if max_len and len(cleaned) > max_len:
                 cleaned = cleaned[:max_len] + '...'
             if len(cleaned) < 15:
                 continue
-            # Skip if looks like navigation boilerplate
-            if any(kw in cleaned.lower() for kw in ['key technology', 'found:', 'sources on', 'click', 'learn more']):
+            # Skip boilerplate
+            if _is_boilerplate(cleaned):
                 continue
             findings.append(cleaned)
 
@@ -172,7 +218,7 @@ def extract_findings_from_source(source: dict, max_per_source: int = 3) -> list[
     seen = set()
     unique = []
     for f in findings:
-        if f not in seen and len(f) >= 15:
+        if f not in seen:
             seen.add(f)
             unique.append(f)
 
@@ -254,108 +300,6 @@ def extract_findings(sources: list[dict], findings: list[str], max_findings: int
             deduped.append(f)
 
     return deduped[:max_findings]
-
-
-# ── Per-source finding extraction ────────────────────────────────────────
-
-# Patterns for extracting concrete facts from a single source.
-# [^.!?\n] is used (not [^.!?]) so newlines break patterns,
-# preventing multi-line UI junk from being captured as a single sentence.
-_SOURCE_PATTERNS = [
-    # Statements with technical verbs — sentences describing actual behavior
-    (r'[^.!?\n]*\b(?:must|requires|uses|supports|provides|returns|accepts|creates|updates|deletes|evicts|configures|sets|checks|monitors)\b[^.!?\n]{5,150}[.!?]', 5, 150),
-    # Statements with comparative/performance language
-    (r'[^.!?\n]*(?:faster|slower|better|worse|unlike|instead|avoid|always|never|should|prefer|approaches)[^.!?\n]{5,150}[.!?]', 5, 150),
-    # Default / behavior statements
-    (r'[^.!?\n]*(?:default|by default|standard)[^.!?\n]{5,150}[.!?]', 5, 150),
-    # Tuning / configuration guidance
-    (r'[^.!?\n]*(?:tune|tuning|configure|setting|parameter|flag)[^.!?\n]{5,150}[.!?]', 5, 150),
-    # Memory / limit statements
-    (r'[^.!?\n]*(?:maxmemory|memory limit|evict|eviction|evicted)[^.!?\n]{5,150}[.!?]', 5, 150),
-    # Inline code with meaningful content (Redis commands, config values)
-    (r'`[^`\n]{8,120}`', 0, 0),
-]
-
-
-# Site UI / community boilerplate to skip — matched anywhere in the string
-_BOILERPLATE_TERMS = {
-    # GitHub-docs edit UI
-    'found a typo', 'want to add', 'have a better explanation',
-    'contribute and make this post better', 'edit this page',
-    'fork and run', 'make this post better',
-    # StackOverflow / community
-    'upvote', 'downvote', 'answered ', 'user contributions',
-    'sign up for', 'log in to', 'create an account',
-    # General site chrome
-    'learn more', 'read more', 'click here', 'sources on',
-    'key technology', 'table of contents', 'navigation',
-    # Placeholder / skeleton text
-    'lorem ipsum', 'coming soon', 'page not found',
-    # Generic "help improve" banners
-    'improve this ', 'suggest an edit', 'edit on github',
-    # Headings that are really titles, not findings
-    'how to ', 'what is ', 'what are ', 'how does ', 'how do ',
-    # Question-statement patterns (article section titles that aren't findings)
-    'what things should we be careful', "here's how", "let's look at",
-    'in this article', 'in this post', 'in this guide',
-}
-
-
-def _is_boilerplate(text: str) -> bool:
-    """Return True if text looks like site UI boilerplate rather than a finding."""
-    t = text.lower()
-    for kw in _BOILERPLATE_TERMS:
-        if kw in t:
-            return True
-    if len(text.split()) < 6:
-        return True
-    return False
-
-
-def _normalize_whitespace(s: str) -> str:
-    """Collapse multiple whitespace chars, strip leading/trailing."""
-    return ' '.join(s.split())
-
-
-def extract_findings_from_source(source: dict, max_per_source: int = 3) -> list[str]:
-    """
-    Extract real factual findings from a source's full content.
-    Returns up to max_per_source findings, deduplicated and cleaned.
-    """
-    findings = []
-
-    content = source.get('content') or source.get('summary', '')
-    if not content or len(content) < 50:
-        return findings
-
-    # Normalize newlines so [^.!?\n] patterns work correctly
-    text = _normalize_whitespace(content)
-
-    for pattern, min_suffix, max_len in _SOURCE_PATTERNS:
-        if not pattern:
-            continue
-        matches = re.findall(pattern, text, re.I)
-        for m in matches:
-            cleaned = _normalize_whitespace(m).strip()
-            if min_suffix and len(cleaned) < min_suffix:
-                continue
-            if max_len and len(cleaned) > max_len:
-                cleaned = cleaned[:max_len] + '...'
-            if len(cleaned) < 15:
-                continue
-            if _is_boilerplate(cleaned):
-                continue
-            findings.append(cleaned)
-
-    # Deduplicate
-    seen = set()
-    unique = []
-    for f in findings:
-        if f not in seen:
-            seen.add(f)
-            unique.append(f)
-
-    return unique[:max_per_source]
 
 
 # ── Source extraction ─────────────────────────────────────────
